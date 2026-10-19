@@ -1,5 +1,11 @@
 # Results Included In This Repository
 
+> **Legacy result snapshot.** These files predate the joint map uncertainty,
+> training-only spatial validation, and dependence-comparison corrections.
+> Numerical files and maps have been preserved as historical outputs; no private
+> data rerun has occurred in this change. See [the rerun guide](../docs/statistical_corrections.md).
+
+
 The `results/` directory contains compact final outputs for the three primary
 wolf models and their four companion surfaces (two human-activity surfaces and
 two single-month March 2024 surfaces). It is meant for review and
@@ -205,3 +211,4 @@ The full generated output folders contain full prediction-grid CSV files,
 exploratory figures, and many intermediate diagnostic files. These are omitted
 here to keep the GitHub project focused on the final diagnostics and map
 products.
+
