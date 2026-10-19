@@ -1,5 +1,10 @@
 # Bayesian Spatial Encounter-Surface Modelling using Camera-Trap Detections
 
+> **Validation update:** statistical corrections are implemented in the code, but
+> the private-data analyses must be rerun. Existing maps and diagnostic numbers
+> are legacy outputs. See the [correction and rerun guide](CameraSpatialEncounterSurfaces2023_2024/docs/statistical_corrections.md).
+
+
 This repository contains a 2023-2024 camera-trap modelling project focused on
 the spatial pattern of wolf and human relative encounter frequency. The analyses model
 independent detections recorded by camera traps using Bayesian count models
@@ -30,3 +35,4 @@ methodology, diagnostics, and outputs.
 
 This repository is licensed under [CC BY 4.0](LICENSE). If you use it, please
 cite it using the metadata in [CITATION.cff](CITATION.cff).
+
