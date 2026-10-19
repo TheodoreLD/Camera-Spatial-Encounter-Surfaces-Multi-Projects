@@ -99,6 +99,9 @@ script_dir <- if (is.na(script_file)) {
   dirname(script_file)
 }
 
+source(file.path(script_dir, "statistical_validation_helpers.R"))
+source(file.path(script_dir, "validation_models.R"))
+
 # Check whether a directory (or its data/ subfolder) holds the required input files.
 has_input_layout <- function(dir) {
   all(file.exists(file.path(dir, input_files_required))) ||
@@ -169,6 +172,12 @@ PPC_NSIM <- switch(RUN_PROFILE, quick = 200L, balanced = 750L, final = 1500L)
 CV_NSIM <- switch(RUN_PROFILE, quick = 150L, balanced = 300L, final = 600L)
 RUN_SPATIAL_CV <- RUN_PROFILE != "quick"
 CV_K <- switch(RUN_PROFILE, quick = 3L, balanced = 4L, final = 5L)
+MAP_NSIM <- switch(RUN_PROFILE, quick = 200L, balanced = 750L, final = 1500L)
+MAP_CHUNK_SIZE <- 1000L
+INLA_SAMPLE_SEED <- 201L
+SPATIAL_FOLD_SEED <- 101L
+# Dependence alternatives are diagnostic comparisons, never automatic replacements.
+RUN_DEPENDENCE_COMPARISON <- RUN_PROFILE != "quick"
 
 # Diagnostics.
 MORAN_ALPHA <- 0.05
@@ -461,16 +470,17 @@ make_control_family <- function(family) {
 }
 
 # Build the INLA fixed-effect prior means and precisions (intercept plus month terms).
-make_control_fixed <- function(fixed_terms = "intercept") {
+make_control_fixed <- function(fixed_terms = "intercept",
+                               intercept_mean = PRIOR_INTERCEPT_MEAN) {
   fixed_terms <- unique(fixed_terms)
 
   mean_values <- rep(0, length(fixed_terms))
   names(mean_values) <- fixed_terms
   if ("intercept" %in% names(mean_values)) {
-    if (!is.finite(PRIOR_INTERCEPT_MEAN)) {
+    if (!is.finite(intercept_mean)) {
       stop("PRIOR_INTERCEPT_MEAN must be set before fitting.")
     }
-    mean_values[["intercept"]] <- PRIOR_INTERCEPT_MEAN
+    mean_values[["intercept"]] <- intercept_mean
   }
   mean_prior <- as.list(mean_values)
   mean_prior$default <- 0
@@ -1029,14 +1039,16 @@ prediction_fixed_effects <- function(model_dat, fixed_terms, settings, n_pred) {
 
 ## 07. Posterior sample extraction -------------------------------------------
 
-# Draw joint posterior samples from a fit, returning NULL on failure.
-posterior_samples_safe <- function(fit, nsim) {
+# Both R's RNG and INLA/GMRFLib's RNG are controlled. Never silently switch to
+# internal-scale hyperparameters or replace failed joint draws with point values.
+posterior_samples_safe <- function(fit, nsim, selection = list(),
+                                   seed = INLA_SAMPLE_SEED) {
   nsim <- as.integer(nsim)
   samples <- tryCatch(
-    INLA::inla.posterior.sample(nsim, fit, intern = FALSE),
-    error = function(e) {
-      tryCatch(INLA::inla.posterior.sample(nsim, fit), error = function(e2) NULL)
-    }
+    with_validation_seed(seed, INLA::inla.posterior.sample(
+      nsim, fit, intern = FALSE, selection = selection,
+      seed = as.integer(seed), num.threads = 1L)),
+    error = function(e) stop("Joint posterior sampling failed: ", conditionMessage(e))
   )
   if (is.null(samples) || !length(samples)) {
     stop("Posterior sampling failed. Make sure control.compute$config = TRUE.")
@@ -1089,30 +1101,16 @@ sample_hyper_vector <- function(samples, pattern, fallback, transform = identity
 # Extract zero-inflation probability draws across posterior samples.
 extract_pi_samples <- function(fit, samples, family) {
   if (!is_zi(family)) return(rep(0, length(samples)))
-  fallback <- hyp_point(fit, PAT_ZPROB)
-  if (!is.finite(fallback)) fallback <- plogis(PRIOR_ZI_LOGIT_MEAN)
-  p <- sample_hyper_vector(samples, PAT_ZPROB, fallback)
-
-  # If samples accidentally came back on logit scale, transform them. This branch
-  # is intentionally conservative and only triggers for values outside [0, 1].
-  if (any(is.finite(p) & (p < 0 | p > 1))) {
-    p <- plogis(p)
-  }
-  pmin(pmax(p, 0), 1)
+  p <- user_hyperparameter_draws(samples, PAT_ZPROB, "zero-inflation probability")
+  if (any(p < 0 | p >= 1)) stop("Zero-inflation draws must be on user scale in [0, 1).")
+  p
 }
 
 # Extract NB size draws across posterior samples.
 extract_size_samples <- function(fit, samples, family) {
   if (!is_nb(family)) return(rep(NA_real_, length(samples)))
-  fallback <- nb_size_point(fit)
-  if (!is.finite(fallback) || fallback <= 0) fallback <- 1e6
-  s <- sample_hyper_vector(samples, PAT_NB_SIZE, fallback)
-
-  # If samples accidentally came back on log-size scale, exponentiate values that
-  # look like internal-scale log(size). This is a fallback only.
-  if (median(s, na.rm = TRUE) < 0 || any(s <= 0, na.rm = TRUE)) {
-    s <- exp(s)
-  }
+  s <- user_hyperparameter_draws(samples, PAT_NB_SIZE, "negative-binomial size")
+  if (any(s <= 0)) stop("Negative-binomial size draws must be positive user-scale values.")
   fam_nb_size(s)
 }
 
@@ -1355,6 +1353,17 @@ compute_diagnostics <- function(fit, samples, model_dat, obs_index, camera_sf,
   }
 
   camera_diag <- camera_residual_diagnostics(model_dat)
+  # Aggregate conditional moments within each JOINT draw, then apply total
+  # variance. Summing marginal row variances loses posterior covariance across
+  # months, especially with camera IID or AR1 effects.
+  camera_moments <- aggregate_joint_predictive_moments(
+    obs_draws$fitted, obs_draws$fit_var, as.character(model_dat$plotID))
+  camera_match <- match(as.character(camera_diag$plotID), camera_moments$plotID)
+  if (anyNA(camera_match)) stop("Camera predictive moments are not aligned.")
+  camera_diag$fitted_count <- camera_moments$fitted_count[camera_match]
+  camera_diag$fit_var <- camera_moments$fit_var[camera_match]
+  camera_diag$pearson <- (camera_diag$y - camera_diag$fitted_count) /
+    sqrt(pmax(camera_diag$fit_var, 1e-9))
   coords_camera <- st_coordinates(camera_sf)
   moran <- moran_perm(coords_camera, camera_diag$pearson,
                       nperm = MORAN_NPERM, two_sided = TRUE)
@@ -2537,82 +2546,16 @@ month_log_rate_ratio_mean <- function(fit, month, settings) {
   0
 }
 
-# Compute and write the effort-weighted month annualization factor.
-write_annualization_weights <- function(fit, model_dat, settings) {
-  if (!isTRUE(settings$use_month_effect) || !"month" %in% names(model_dat)) {
-    return(list(
-      factor = 1,
-      label = "single-period encounter-frequency surface",
-      weights = NULL
-    ))
-  }
-
-  effort_col <- if ("total_effort_days" %in% names(model_dat)) {
-    "total_effort_days"
-  } else if ("effort_days" %in% names(model_dat)) {
-    "effort_days"
-  } else {
-    stop("No effort column found for annualized prediction weighting.")
-  }
-
-  month_effort <- model_dat %>%
-    dplyr::group_by(month) %>%
-    dplyr::summarise(
-      effort_days = sum(.data[[effort_col]], na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::filter(is.finite(effort_days), effort_days > 0) %>%
-    dplyr::arrange(month)
-
-  total_effort <- sum(month_effort$effort_days)
-  if (!nrow(month_effort) || !is.finite(total_effort) || total_effort <= 0) {
-    return(list(
-      factor = 1,
-      label = "single-period encounter-frequency surface",
-      weights = month_effort
-    ))
-  }
-
-  prediction_month <- settings$month_prediction
-  prediction_log_ratio <- month_log_rate_ratio_mean(fit, prediction_month, settings)
-
-  month_effort$weight <- month_effort$effort_days / total_effort
-  month_effort$log_rate_ratio_to_prediction_month <- vapply(
-    month_effort$month,
-    function(m) month_log_rate_ratio_mean(fit, m, settings) - prediction_log_ratio,
-    numeric(1)
-  )
-  month_effort$mean_rate_ratio_to_prediction_month <-
-    exp(month_effort$log_rate_ratio_to_prediction_month)
-  factor <- sum(month_effort$weight *
-                  month_effort$mean_rate_ratio_to_prediction_month)
-  month_effort$annualization_factor <- factor
-  month_effort$prediction_baseline_month <- prediction_month
-
-  readr::write_csv(month_effort,
-                   path_out(paste0(SURVEY_PREFIX, "_annualization_weights.csv")))
-
-  list(
-    factor = factor,
-    label = sprintf(
-      "annualized %s surface; baseline %s; factor %.3f",
-      SURVEY_YEAR,
-      prediction_month,
-      factor
-    ),
-    weights = month_effort
-  )
-}
-
-# Write the posterior hyperparameter summary table.
-write_model_hyperparameters <- function(fit) {
-  if (is.null(fit$summary.hyperpar)) return(invisible(NULL))
-  out <- data.frame(parameter = rownames(fit$summary.hyperpar),
-                    fit$summary.hyperpar,
-                    row.names = NULL,
-                    check.names = FALSE)
-  readr::write_csv(out, path_out(paste0(SURVEY_PREFIX, "_hyperparameters.csv")))
-  invisible(out)
+# Save summaries of the draw-wise aggregation factor. The map computation uses
+# each joint draw's own factor, never this summary as a constant multiplier.
+write_annualization_weights <- function(annualization) {
+  weights <- annualization$weights
+  weights$factor_posterior_mean <- annualization$factor
+  weights$factor_posterior_sd <- annualization$factor_sd
+  weights$factor_q05 <- annualization$factor_q05
+  weights$factor_q95 <- annualization$factor_q95
+  readr::write_csv(weights, path_out(paste0(SURVEY_PREFIX, "_annualization_weights.csv")))
+  invisible(annualization)
 }
 
 
@@ -2687,7 +2630,7 @@ fit_final_model <- function(model_dat, settings, family) {
       compute = TRUE,
       link = 1
     ),
-    control.compute = list(config = FALSE, dic = TRUE, waic = TRUE, cpo = TRUE),
+    control.compute = list(config = TRUE, dic = TRUE, waic = TRUE, cpo = TRUE),
     control.fixed = make_control_fixed(fixed_terms),
     control.family = make_control_family(family),
     verbose = FALSE
@@ -2763,22 +2706,13 @@ make_prediction_outputs <- function(fit_obj, diag, settings, family) {
   fit <- fit_obj$fit
   pred_sf <- fit_obj$pred_sf
   pred_index <- fit_obj$pred_index
-  eta_mean <- fit$summary.linear.predictor$mean[pred_index]
-  eta_sd <- fit$summary.linear.predictor$sd[pred_index]
-  eta_sd <- pmax(eta_sd, 1e-9)
-  annualization <- write_annualization_weights(fit, diag$model_dat, settings)
-  annual_factor <- annualization$factor
+  joint <- joint_surface_summary(fit_obj, diag$model_dat, settings, family)
+  annualization <- joint$annualization
+  write_annualization_weights(annualization)
+  pred_sf <- cbind(pred_sf, joint$summary)
+  pred_sf$posterior_nsim <- joint$nsim
+  pred_sf$summary_method <- joint$method
 
-  # Marginal posterior mean of the expected encounter frequency per 100 camera-days.
-  # This is the latent mean surface, not a draw of future observation noise.
-  rate100_latent_mean <- annual_factor * 100 * exp(eta_mean + 0.5 * eta_sd^2)
-  pred_sf$mean <- fam_mean(rate100_latent_mean, diag$pi_hat, family, diag$size_hat)
-
-  # Approximate posterior uncertainty in the latent mean surface from the marginal
-  # linear-predictor posterior. This avoids sampling the whole 36k-cell latent grid.
-  pred_sf$cv <- sqrt(expm1(eta_sd^2))
-  pred_sf$sd <- pred_sf$mean * pred_sf$cv
-  pred_sf$annualization_factor <- annual_factor
 
   model_dat <- diag$model_dat
   overall_rate <- 100 * sum(model_dat$y) / sum(model_dat$total_effort_days)
@@ -2800,9 +2734,13 @@ make_prediction_outputs <- function(fit_obj, diag, settings, family) {
   r_mean <- make_raster("mean")
   r_sd <- make_raster("sd")
   r_cv <- make_raster("cv")
+  r_q05 <- make_raster("q05")
+  r_q95 <- make_raster("q95")
   names(r_mean) <- paste0(TARGET_SLUG, "_events_per_100_camera_days")
   names(r_sd) <- "posterior_sd"
   names(r_cv) <- "posterior_cv"
+  names(r_q05) <- "posterior_q05"
+  names(r_q95) <- "posterior_q95"
 
   terra::writeRaster(r_mean,
                      path_out(paste0(SURVEY_PREFIX,
@@ -2817,13 +2755,18 @@ make_prediction_outputs <- function(fit_obj, diag, settings, family) {
                                      "_final_predicted_events_per_100_days_cv.tif")),
                      overwrite = TRUE)
 
-  rasters <- list(mean = r_mean, sd = r_sd, cv = r_cv)
+  terra::writeRaster(r_q05, path_out(paste0(SURVEY_PREFIX,
+    "_final_predicted_events_per_100_days_q05.tif")), overwrite = TRUE)
+  terra::writeRaster(r_q95, path_out(paste0(SURVEY_PREFIX,
+    "_final_predicted_events_per_100_days_q95.tif")), overwrite = TRUE)
+  rasters <- list(mean = r_mean, sd = r_sd, cv = r_cv, q05 = r_q05, q95 = r_q95)
 
   plot_map_outputs(fit_obj$camera_sf, diag$model_dat, rasters, overall_rate,
                    annualization)
   invisible(list(pred_sf = pred_sf, rasters = rasters,
                  overall_rate = overall_rate,
-                 annualization = annualization))
+                 annualization = annualization, method = joint$method,
+                 nsim = joint$nsim, seed = joint$seed))
 }
 
 # Render and save the mean, SD, and CV map figures.
@@ -2933,7 +2876,8 @@ plot_map_outputs <- function(camera_sf, model_dat, rasters, overall_rate,
 ## 13. Spatial block cross-validation ----------------------------------------
 
 # Run spatial block cross-validation with a per-fold mesh rebuild.
-spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
+spatial_block_cv <- function(model_dat, settings, family, K = CV_K,
+                              folds = NULL, dependence = "none", output_label = "final") {
   cat(sprintf("\n[wolf] spatial block CV for %s (K=%d)\n", FINAL_MODEL_NAME, K))
 
   model_dat <- model_dat %>% mutate(y = as.integer(wolf_events), intercept = 1)
@@ -2953,17 +2897,27 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
   y <- model_dat$y
   effort <- model_dat$total_effort_days
 
-  K_final <- min(K, nrow(coords_camera) - 1L)
-  if (K_final < 2) {
-    cat("[wolf] spatial CV skipped: too few cameras.\n")
-    return(NULL)
+  if (is.null(folds)) {
+    K_final <- min(K, nrow(coords_camera) - 1L)
+    fold <- strict_spatial_folds(coords_camera, K_final, seed = SPATIAL_FOLD_SEED)
+    folds <- data.frame(plotID = camera_summary$plotID,
+                        x = coords_camera[, 1L], y = coords_camera[, 2L], fold = fold)
+    readr::write_csv(folds, path_out(paste0(SURVEY_PREFIX, "_spatial_cv_folds.csv")))
+  } else {
+    if (anyDuplicated(folds$plotID) || !setequal(folds$plotID, camera_summary$plotID))
+      stop("Saved spatial folds do not match the complete camera set.")
+    matched <- match(camera_summary$plotID, folds$plotID)
+    if (any(abs(folds$x[matched] - coords_camera[, 1L]) > 1e-6) ||
+        any(abs(folds$y[matched] - coords_camera[, 2L]) > 1e-6))
+      stop("Camera coordinates do not match the saved folds.")
+    fold <- folds$fold[matched]
+    if (anyNA(fold) || length(unique(fold)) < 2L)
+      stop("Saved folds must assign every camera to at least two nonempty folds.")
   }
-
-  fold <- tryCatch(
-    kmeans(scale(coords_camera), centers = K_final, nstart = 20)$cluster,
-    error = function(e) sample(rep_len(seq_len(K_final), nrow(coords_camera)))
-  )
   row_fold <- fold[match(model_dat$plotID, camera_summary$plotID)]
+  if (anyNA(row_fold)) stop("Some model rows lack a spatial fold.")
+  dep <- dependence_design(model_dat, dependence)
+  prior_rows <- list()
 
   rows <- list()
   cam_rows <- list()
@@ -2985,8 +2939,11 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
       A_test <- INLA::inla.spde.make.A(spde_obj$mesh,
                                        loc = coords_row[test, , drop = FALSE])
 
-      fixed_train <- as.data.frame(model_dat[train, fixed_terms, drop = FALSE])
-      fixed_test <- as.data.frame(model_dat[test, fixed_terms, drop = FALSE])
+      fixed_train <- cbind(as.data.frame(model_dat[train, fixed_terms, drop = FALSE]),
+                           dep$indices[train, , drop = FALSE])
+      fixed_test <- cbind(as.data.frame(model_dat[test, fixed_terms, drop = FALSE]),
+                          dep$indices[test, , drop = FALSE])
+      fold_prior_mean <- training_intercept_mean(y[train], effort[train])
 
       stack_train <- INLA::inla.stack(
         tag = "train",
@@ -3007,7 +2964,7 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
 
       formula <- as.formula(
         paste("y ~ 0 +",
-              paste(c(fixed_terms, "f(spatial, model = spde_obj$spde)"),
+              paste(c(fixed_terms, "f(spatial, model = spde_obj$spde)", dep$term),
                     collapse = " + "))
       )
 
@@ -3022,13 +2979,14 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
           link = 1
         ),
         control.compute = list(config = TRUE),
-        control.fixed = make_control_fixed(fixed_terms),
+        control.fixed = make_control_fixed(fixed_terms, intercept_mean = fold_prior_mean),
         control.family = make_control_family(family),
         verbose = FALSE
       )
 
       test_index <- INLA::inla.stack.index(stack_all, tag = "test")$data
-      samples <- posterior_samples_safe(fit_fold, CV_NSIM)
+      samples <- posterior_samples_safe(fit_fold, CV_NSIM,
+                                        seed = INLA_SAMPLE_SEED + 100L + as.integer(f))
       test_draws <- build_posterior_draws(fit_fold, samples, test_index,
                                           effort[test], family,
                                           expected_n_stack = length(fit_fold$summary.linear.predictor$mean))
@@ -3081,7 +3039,11 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
         covered_90 = y_cam >= lo_cam & y_cam <= hi_cam
       )
 
-      list(row = row_out, camera = cam_out)
+      list(row = row_out, camera = cam_out,
+           prior = data.frame(fold = f, dependence = dependence,
+             training_rows = length(train), held_out_rows = length(test),
+             training_events = sum(y[train]), training_effort = sum(effort[train]),
+             intercept_prior_mean = fold_prior_mean))
     }, error = function(e) {
       failed_folds <<- c(failed_folds, paste0(f, ": ", conditionMessage(e)))
       NULL
@@ -3090,6 +3052,7 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
     if (!is.null(result)) {
       rows[[length(rows) + 1L]] <- result$row
       cam_rows[[length(cam_rows) + 1L]] <- result$camera
+      prior_rows[[length(prior_rows) + 1L]] <- result$prior
     }
   }
 
@@ -3102,8 +3065,8 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
   cv_row <- do.call(rbind, rows)
   cv_cam <- do.call(rbind, cam_rows)
 
-  readr::write_csv(cv_row, path_out(paste0(SURVEY_PREFIX, "_final_spatial_block_cv_rows.csv")))
-  readr::write_csv(cv_cam, path_out(paste0(SURVEY_PREFIX, "_final_spatial_block_cv_camera.csv")))
+  readr::write_csv(cv_row, path_out(paste0(SURVEY_PREFIX, "_", output_label, "_spatial_block_cv_rows.csv")))
+  readr::write_csv(cv_cam, path_out(paste0(SURVEY_PREFIX, "_", output_label, "_spatial_block_cv_camera.csv")))
 
   summary <- bind_rows(
     data.frame(
@@ -3125,7 +3088,7 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
   )
 
   readr::write_csv(summary,
-                   path_out(paste0(SURVEY_PREFIX, "_final_spatial_block_cv_summary.csv")))
+                   path_out(paste0(SURVEY_PREFIX, "_", output_label, "_spatial_block_cv_summary.csv")))
 
   cat(sprintf(
     "[wolf] spatial CV rows: mean LPD %.3f | RMSE count %.2f | RMSE rate %.2f | 90%% coverage %.2f\n",
@@ -3141,7 +3104,21 @@ spatial_block_cv <- function(model_dat, settings, family, K = CV_K) {
     summary$value[summary$level == "camera" & summary$metric == "coverage_90"]
   ))
 
-  list(row = cv_row, camera = cv_cam, summ = summary)
+  calibration <- cv_calibration_summary(cv_row, cv_cam)
+  fold_metrics <- do.call(rbind, lapply(sort(unique(cv_row$fold)), function(f) {
+    z <- cv_calibration_summary(cv_row[cv_row$fold == f, , drop = FALSE],
+                                cv_cam[cv_cam$fold == f, , drop = FALSE])
+    z$fold <- f
+    z
+  }))
+  readr::write_csv(calibration, path_out(paste0(SURVEY_PREFIX, "_", output_label,
+                                               "_spatial_cv_calibration.csv")))
+  readr::write_csv(fold_metrics, path_out(paste0(SURVEY_PREFIX, "_", output_label,
+                                                "_spatial_cv_fold_metrics.csv")))
+  readr::write_csv(do.call(rbind, prior_rows), path_out(paste0(SURVEY_PREFIX, "_", output_label,
+                                                             "_spatial_cv_training_priors.csv")))
+  list(row = cv_row, camera = cv_cam, summ = summary, folds = folds,
+       calibration = calibration, fold_metrics = fold_metrics)
 }
 
 
@@ -3193,11 +3170,13 @@ prior_lines_for_report <- function(settings, family) {
 
 # Write the consolidated validation report.
 write_validation_report <- function(model_dat, diag, cv, prediction,
-                                    temporal_diag = NULL) {
+                                    temporal_diag = NULL, dependence_comparison = NULL) {
   failures <- diagnostic_failures(diag)
   passes_required <- isTRUE(diag$diagnostics_ok)
   n_cameras <- dplyr::n_distinct(model_dat$plotID)
   annualization <- prediction$annualization
+  review <- validation_review_status(diag, cv, temporal_diag, dependence_comparison,
+                                     comparison_required = RUN_DEPENDENCE_COMPARISON)
 
   cv_lines <- if (!is.null(cv)) {
     c(
@@ -3303,8 +3282,17 @@ write_validation_report <- function(model_dat, diag, cv, prediction,
     if (!passes_required) {
       sprintf("  Stated limitation: %s", paste(failures, collapse = "; "))
     } else NULL,
+    sprintf("  Overall review status: %s", review$status),
+    if (length(review$reasons)) paste0("  Review reason: ", review$reasons) else NULL,
+    "  A legacy PPC/Moran pass does not establish predictive calibration or temporal robustness.",
     cv_lines,
+    "  Coverage below 0.90 is a descriptive review flag, not an independence-based significance test.",
+    "  See spatial_cv_calibration.csv and spatial_cv_fold_metrics.csv for counts, fold ranges, widths, and interval scores.",
     temporal_lines,
+    "  Residual p-values are exploratory screens; nonsignificance does not rule out a mechanism.",
+    "  Spatial CV and mesh stability alone cannot establish absence of temporal distortion.",
+    sprintf("  Dependence comparison: %s", if (is.null(dependence_comparison)) "not run" else
+      if (any(dependence_comparison$status != "completed")) "incomplete; review required" else "completed; inspect comparison report"),
     prior_lines_for_report(settings, FINAL_FAMILY),
     "",
     "Temporal structure:",
@@ -3312,8 +3300,8 @@ write_validation_report <- function(model_dat, diag, cv, prediction,
       c("  Calendar camera-month is included as a fixed effect after aligning effort and events by eventStart month.",
         sprintf("  Coefficient-coding baseline month: %s", MONTH_REFERENCE),
         sprintf("  Prediction-stack baseline month used internally: %s", MONTH_PREDICTION),
-        sprintf("  Map aggregation: effort-weighted annualized %s surface; scale factor %.3f.",
-                SURVEY_YEAR, annualization$factor))
+        sprintf("  Map aggregation: effort-weighted sampled-month %s surface; draw-wise factor mean %.3f (SD %.3f).",
+                SURVEY_YEAR, annualization$factor, annualization$factor_sd))
     } else {
       c(sprintf("  Single period only (%s); no month fixed effect fitted.", MONTH_REFERENCE),
         "  Map aggregation: single-period prediction surface (no annualization; scale factor 1.000).")
@@ -3321,6 +3309,8 @@ write_validation_report <- function(model_dat, diag, cv, prediction,
     "",
     "Prediction:",
     sprintf("  Map units: expected %s events per 100 camera-days.", TARGET_LABEL),
+    sprintf("  Map summary method: %s; joint posterior draws: %d.", prediction$method, prediction$nsim),
+    "  Spatial field, intercept, month effects, and zero-inflation probability are transformed within each joint draw.",
     "",
     "Interpretation:",
     sprintf("  Relative %s encounter frequency only.", TARGET_LABEL),
@@ -3339,7 +3329,9 @@ write_validation_report <- function(model_dat, diag, cv, prediction,
 }
 
 # Write the one-row run manifest.
-write_manifest <- function(model_dat, diag, cv) {
+write_manifest <- function(model_dat, diag, cv, prediction, temporal_diag, dependence_comparison) {
+  review <- validation_review_status(diag, cv, temporal_diag, dependence_comparison,
+                                     comparison_required = RUN_DEPENDENCE_COMPARISON)
   manifest <- data.frame(
     survey = SURVEY_ID,
     prefix = SURVEY_PREFIX,
@@ -3352,6 +3344,14 @@ write_manifest <- function(model_dat, diag, cv) {
     month_effect = isTRUE(settings$use_month_effect),
     diagnostics_ok = isTRUE(diag$diagnostics_ok),
     spatial_cv_run = !is.null(cv),
+    review_status = review$status,
+    map_summary_method = prediction$method,
+    map_nsim = prediction$nsim,
+    map_seed = prediction$seed,
+    spatial_fold_seed = SPATIAL_FOLD_SEED,
+    training_only_cv_prior = TRUE,
+    dependence_comparison_complete = !is.null(dependence_comparison) &&
+      all(dependence_comparison$status == "completed"),
     run_profile = RUN_PROFILE
   )
   readr::write_csv(manifest, path_out(paste0(SURVEY_PREFIX, "_run_manifest.csv")))
@@ -4242,11 +4242,13 @@ cv <- NULL
 if (RUN_SPATIAL_CV) {
   cv <- spatial_block_cv(model_dat, settings, family, K = CV_K)
 }
+dependence_comparison <- run_dependence_comparison(
+  model_dat, settings, family, fit_obj, diag, cv, prediction, temporal_diag)
 mesh_sensitivity <- run_mesh_sensitivity(model_dat, settings, family)
 # 10. Final summaries.
 write_science_checks_summary_ordered(model_comparison, prior_influence, prior_sensitivity, mesh_sensitivity)
-write_validation_report(model_dat, diag, cv, prediction, temporal_diag)
-write_manifest(model_dat, diag, cv)
+write_validation_report(model_dat, diag, cv, prediction, temporal_diag, dependence_comparison)
+write_manifest(model_dat, diag, cv, prediction, temporal_diag, dependence_comparison)
 
 cat(sprintf("\n[wolf] VALIDATION\n"))
 cat(sprintf("[wolf]   PPC method: %s\n", diag$ppc_method))
@@ -4275,7 +4277,11 @@ if (is_zi(family)) {
 if (is_nb(family)) {
   cat(sprintf("[wolf]   negative-binomial size mean: %.3f\n", diag$size_hat))
 }
-cat(sprintf("[wolf]   passes required checks: %s\n", isTRUE(diag$diagnostics_ok)))
+cat(sprintf("[wolf]   legacy PPC/Moran checks: %s\n", isTRUE(diag$diagnostics_ok)))
+review <- validation_review_status(diag, cv, temporal_diag, dependence_comparison,
+                                   comparison_required = RUN_DEPENDENCE_COMPARISON)
+cat(sprintf("[wolf]   overall review status: %s\n", review$status))
+if (length(review$reasons)) cat(paste0("[wolf]   review: ", review$reasons, "\n"))
 
 if (!isTRUE(diag$diagnostics_ok)) {
   cat(sprintf("[wolf]   NOTE: mapped despite failing %s.\n",
@@ -4309,3 +4315,4 @@ cat("  _hyperparameters.csv, _month_coefficients.csv, _month_observed_summary.cs
 cat("  _final_spatial_block_cv_summary.csv (if CV was run), _run_manifest.csv\n")
 
 ###############################################################################
+
