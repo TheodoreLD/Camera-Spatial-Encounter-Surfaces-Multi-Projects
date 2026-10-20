@@ -992,10 +992,19 @@ included in each `results/<survey>/` folder and what each one contains.
 - `ggplot2`
 - `viridis`
 - `scales`
+- `sn` (required by INLA joint posterior sampling)
 - `INLA`
 
-The scripts do not install packages automatically unless explicitly changed by
-the user. INLA usually requires installing from the INLA repository.
+The scripts check these dependencies before running. Install them once in R:
+
+```r
+install.packages(
+  c("readr", "dplyr", "tidyr", "sf", "terra", "ggplot2", "viridis", "scales", "sn", "INLA"),
+  repos = c(INLA = "https://inla.r-inla-download.org/R/stable", getOption("repos"))
+)
+```
+
+Package installation remains opt-in; analysis runs do not modify the R environment.
 
 ## Reproduction And Validation
 
