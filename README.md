@@ -1,38 +1,61 @@
-# Bayesian Spatial Encounter-Surface Modelling using Camera-Trap Detections
+# Bayesian Camera-Trap Encounter Surfaces
 
-> **Validation update:** statistical corrections are implemented in the code, but
-> the private-data analyses must be rerun. Existing maps and diagnostic numbers
-> are legacy outputs. See the [correction and rerun guide](CameraSpatialEncounterSurfaces2023_2024/docs/statistical_corrections.md).
+[![Statistical validation](https://github.com/TheodoreLD/Camera-Spatial-Encounter-Surfaces-Multi-Projects/actions/workflows/statistical-validation.yml/badge.svg)](https://github.com/TheodoreLD/Camera-Spatial-Encounter-Surfaces-Multi-Projects/actions/workflows/statistical-validation.yml)
 
+A reusable R workflow for estimating spatial patterns of wolf and human activity
+from camera-trap detections. Seven survey analyses share one INLA-SPDE modelling
+library, with exposure adjustment, count-likelihood comparison, spatial
+cross-validation, and uncertainty maps.
 
-This repository contains a 2023-2024 camera-trap modelling project focused on
-the spatial pattern of wolf and human relative encounter frequency. The analyses model
-independent detections recorded by camera traps using Bayesian count models
-with INLA-SPDE spatial random fields. Active camera-days are used as exposure,
-calendar month is included as a fixed temporal control, and outputs are
-relative encounter-frequency surfaces expressed as expected independent
-events per 100 camera-days across the sampled survey-year period.
+The target is **expected independent events per 100 camera-days** over the
+sampled period. These surfaces describe relative encounter frequency; they do
+not estimate abundance, density, or occupancy.
 
-## Project
+| Area | What the code demonstrates |
+| --- | --- |
+| Bayesian statistics | Poisson, negative-binomial and zero-inflated models; explicit priors; joint posterior simulation |
+| Spatial analysis | SPDE meshes, coordinate transformations, raster prediction, spatial camera holdouts |
+| Validation | Posterior predictive checks, calibration and interval scores, residual diagnostics, camera IID/AR1 sensitivity |
+| Software engineering | Shared functions and thin survey runners, strict input checks, seeded simulations, regression tests and native INLA CI |
 
-- [CameraSpatialEncounterSurfaces2023_2024](CameraSpatialEncounterSurfaces2023_2024/):
-  seven Bayesian spatial encounter surfaces from camera-trap data. Three are
-  the primary wolf surfaces -- a 2023 road-camera negative-binomial
-  spatial-month model, a 2024 forest-camera negative-binomial spatial-month
-  model, and a 2024 road-camera zero-inflated negative-binomial spatial-month
-  model. Four are companions: two multi-month **human-activity** surfaces
-  (people and vehicles) as a relative human-disturbance index, and two
-  single-month (March 2024) spatial-only surfaces for wolf and human activity.
+## Start here
 
-All seven run the same analyses, diagnostics, and outputs through a single
-shared analysis library
-([`scripts/wolf_encounter_surface_lib.R`](CameraSpatialEncounterSurfaces2023_2024/scripts/wolf_encounter_surface_lib.R)),
-driven by one thin runner per survey. See the
-[project README](CameraSpatialEncounterSurfaces2023_2024/README.md) for the full
-methodology, diagnostics, and outputs.
+- [Methods and survey results](CameraSpatialEncounterSurfaces2023_2024/README.md)
+- [Input schemas and data access](CameraSpatialEncounterSurfaces2023_2024/data/README.md)
+- [Curated maps and diagnostic files](CameraSpatialEncounterSurfaces2023_2024/results/README.md)
+- [Statistical corrections and remaining survey validation](CameraSpatialEncounterSurfaces2023_2024/docs/statistical_corrections.md)
+- [Shared analysis library](CameraSpatialEncounterSurfaces2023_2024/scripts/wolf_encounter_surface_lib.R)
 
-## License And Citation
+## Run the public checks
 
-This repository is licensed under [CC BY 4.0](LICENSE). If you use it, please
-cite it using the metadata in [CITATION.cff](CITATION.cff).
+From the repository root, run the base-R regression suite:
 
+```sh
+Rscript CameraSpatialEncounterSurfaces2023_2024/tests/test_statistical_validation.R
+```
+
+After installing the [analysis dependencies](CameraSpatialEncounterSurfaces2023_2024/README.md#required-r-packages),
+run the native INLA example and integration checks:
+
+```sh
+CAMERA_SYNTHETIC_OUTPUT_DIR=synthetic-integration-outputs Rscript CameraSpatialEncounterSurfaces2023_2024/tests/test_inla_integration.R
+```
+
+This generates seeded synthetic camera-month data, fits models, builds maps,
+runs spatial holdouts and IID/AR1 comparisons, and writes diagnostic reports.
+It requires no private survey data. GitHub Actions runs both suites and retains
+the synthetic outputs and session information as a downloadable artifact for
+30 days. The synthetic example tests implementation, not ecological conclusions.
+
+## Survey validation status
+
+The original survey inputs are private. The committed survey maps and diagnostic
+numbers are a **legacy snapshot** from before the joint-uncertainty and
+spatial-validation corrections. They require regeneration with the corrected
+code. Human-activity predictive undercoverage and residual temporal dependence
+remain open scientific checks; the [rerun guide](CameraSpatialEncounterSurfaces2023_2024/docs/statistical_corrections.md)
+states what evidence is still needed.
+
+## License and citation
+
+[CC BY 4.0](LICENSE). Citation metadata is in [CITATION.cff](CITATION.cff).

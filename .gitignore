@@ -15,3 +15,7 @@ CameraSpatialEncounterSurfaces2023_2024/data/*.xlsx
 CameraSpatialEncounterSurfaces2023_2024/outputs/
 CameraSpatialEncounterSurfaces2023_2024/**/*prediction_grid*.csv
 CameraSpatialEncounterSurfaces2023_2024/rerun_logs/
+
+# Public synthetic integration runs are generated locally or retained in CI.
+synthetic-integration-outputs/
+
