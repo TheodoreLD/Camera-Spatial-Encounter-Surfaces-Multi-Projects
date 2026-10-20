@@ -34,4 +34,14 @@ jobs:
           install.packages(c("readr", "dplyr", "tidyr", "sf", "terra", "ggplot2", "viridis", "scales", "sn", "INLA"), repos = repos)
           stopifnot(requireNamespace("INLA", quietly = TRUE))
       - name: Exercise native INLA workflow on synthetic data
+        env:
+          CAMERA_SYNTHETIC_OUTPUT_DIR: synthetic-integration-outputs
         run: Rscript CameraSpatialEncounterSurfaces2023_2024/tests/test_inla_integration.R
+      - name: Save synthetic outputs and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-integration-outputs
+          path: synthetic-integration-outputs
+          if-no-files-found: ignore
+          retention-days: 30
