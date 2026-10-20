@@ -1508,7 +1508,6 @@ temporal_autocorrelation_diagnostics <- function(model_dat,
   p_time <- ggplot(dat, aes(start_date, pearson)) +
     geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
     geom_point(alpha = 0.75) +
-    geom_smooth(se = TRUE, method = "loess", formula = y ~ x) +
     labs(
       title = paste0("Temporal residual trend: ", prefix),
       subtitle = paste0(final_model, " | residuals by deployment start date"),
@@ -1516,6 +1515,13 @@ temporal_autocorrelation_diagnostics <- function(model_dat,
       y = "row Pearson residual"
     ) +
     theme_minimal(base_size = 12)
+  # LOESS is poorly determined with only a few distinct deployment dates.
+  # A small synthetic/single-period survey still gets a usable diagnostic plot.
+  n_dates <- dplyr::n_distinct(dat$start_date)
+  if (n_dates >= 2L) {
+    p_time <- p_time + geom_smooth(se = TRUE,
+      method = if (n_dates >= 5L) "loess" else "lm", formula = y ~ x)
+  }
 
   ggsave(
     path_out(paste0(prefix, "_", final_model,
