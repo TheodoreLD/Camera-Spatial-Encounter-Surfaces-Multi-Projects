@@ -31,7 +31,7 @@ jobs:
         shell: Rscript {0}
         run: |
           repos <- c(INLA = "https://inla.r-inla-download.org/R/stable", getOption("repos"))
-          install.packages(c("readr", "dplyr", "tidyr", "sf", "terra", "ggplot2", "viridis", "scales", "INLA"), repos = repos)
+          install.packages(c("readr", "dplyr", "tidyr", "sf", "terra", "ggplot2", "viridis", "scales", "sn", "INLA"), repos = repos)
           stopifnot(requireNamespace("INLA", quietly = TRUE))
       - name: Exercise native INLA workflow on synthetic data
         run: Rscript CameraSpatialEncounterSurfaces2023_2024/tests/test_inla_integration.R
