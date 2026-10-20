@@ -6,7 +6,8 @@ source(file.path(project, "scripts", "statistical_validation_helpers.R"))
 source(file.path(project, "scripts", "validation_models.R"))
 for (e in parse(file.path(project, "scripts", "wolf_encounter_surface_lib.R"))) {
   if (is.call(e) && identical(e[[1L]], as.name("<-")) &&
-      is.call(e[[3L]]) && identical(e[[3L]][[1L]], as.name("function"))) eval(e)
+      ((is.call(e[[3L]]) && identical(e[[3L]][[1L]], as.name("function"))) ||
+       startsWith(as.character(e[[2L]]), "PAT_"))) eval(e)
 }
 suppressPackageStartupMessages({
   library(INLA); library(dplyr); library(tidyr); library(readr)
@@ -25,8 +26,10 @@ SURVEY_YEAR <- "2024"
 FINAL_FAMILY <- "nbinomial"
 FINAL_MODEL_NAME <- "synthetic_nb"
 EPSG_UTM <- 32634L
-OUTPUT_DIR <- tempfile("synthetic-inla-")
-dir.create(OUTPUT_DIR)
+OUTPUT_DIR <- Sys.getenv("CAMERA_SYNTHETIC_OUTPUT_DIR", unset = tempfile("synthetic-inla-"))
+dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
+writeLines(c("Synthetic integration outputs only; these are not survey results.",
+             capture.output(sessionInfo())), file.path(OUTPUT_DIR, "session_info.txt"))
 PPC_NSIM <- CV_NSIM <- MAP_NSIM <- 64L
 MAP_CHUNK_SIZE <- 7L
 CV_K <- 2L
@@ -62,6 +65,7 @@ camera_deviation <- rnorm(12, 0, 0.4)
 dat$wolf_events <- rnbinom(nrow(dat), mu = 20 * exp(-1 + camera_deviation[idx]), size = 4)
 dat$wolf_events_per_100_days <- 100 * dat$wolf_events / dat$total_effort_days
 dat <- add_month_design(dat, settings)
+readr::write_csv(dat, file.path(OUTPUT_DIR, "synthetic_camera_months.csv"))
 PRIOR_INTERCEPT_MEAN <- training_intercept_mean(dat$wolf_events, dat$total_effort_days)
 
 base <- fit_final_model(dat, settings, FINAL_FAMILY)
@@ -86,6 +90,9 @@ for (f in prior$fold) {
 }
 td <- temporal_autocorrelation_diagnostics(diag$model_dat)
 comparison <- run_dependence_comparison(dat, settings, FINAL_FAMILY, base, diag, cv, map, td)
+if (any(comparison$status != "completed")) {
+  stop(paste(comparison$failure[comparison$status != "completed"], collapse = "\n"))
+}
 stopifnot(all(comparison$status == "completed"), nrow(comparison) == 3L)
 write_validation_report(dat, diag, cv, map, td, comparison)
 write_manifest(dat, diag, cv, map, td, comparison)

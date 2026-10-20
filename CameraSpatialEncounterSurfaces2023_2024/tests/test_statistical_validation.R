@@ -14,7 +14,8 @@ for (file in list.files(file.path(project, "scripts"), "\\.R$", full.names = TRU
   if (basename(file) == "wolf_encounter_surface_lib.R") {
     for (e in expr) {
       if (is.call(e) && identical(e[[1L]], as.name("<-")) &&
-          is.call(e[[3L]]) && identical(e[[3L]][[1L]], as.name("function"))) eval(e)
+          ((is.call(e[[3L]]) && identical(e[[3L]][[1L]], as.name("function"))) ||
+           startsWith(as.character(e[[2L]]), "PAT_"))) eval(e)
     }
   }
 }
@@ -55,6 +56,11 @@ check(isTRUE(all.equal(mix$factor, 0.25 + 0.75 * exp(c(-0.5, 0.5)))), "month wei
 check(errors(latent_component_draws(samples, "missing", 1L)), "missing posterior component fails")
 check(errors(user_hyperparameter_draws(samples, "unavailable", "test")), "no point-estimate hyperparameter fallback")
 check(all(user_hyperparameter_draws(samples, "zero", "test") == 0.2), "user-scale hyperparameter extraction")
+check(all(extract_pi_samples(NULL, samples, "zeroinflatednbinomial1") == 0.2),
+      "production ZI extractor uses shared hyperparameter pattern")
+nb_samples <- lapply(samples, function(s) {s$hyperpar <- c("size for nbinomial" = 4); s})
+check(all(extract_size_samples(NULL, nb_samples, "nbinomial") == 4),
+      "production NB extractor uses shared hyperparameter pattern")
 
 # Folds use coordinates only and do not depend on unrelated RNG use.
 coords <- cbind(rep(0:5, each = 2), rep(c(0, 1), 6))
