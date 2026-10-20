@@ -3870,9 +3870,8 @@ write_model_choice_report <- function(model_comparison) {
       }
     }
 
-    # CPO failure rate for every candidate that reports one. A high rate means
-    # INLA's leave-one-out approximation was unreliable for many observations,
-    # so WAIC/DIC for that row should be read with caution.
+    # CPO failures concern the leave-one-out CPO/PIT approximation. Investigate
+    # those values separately; this flag is not a WAIC/DIC error estimate.
     for (i in seq_len(nrow(model_comparison))) {
       m <- model_comparison[i, ]
       if (is.finite(m$cpo_failure_rate[[1]]) && m$cpo_failure_rate[[1]] > 0) {

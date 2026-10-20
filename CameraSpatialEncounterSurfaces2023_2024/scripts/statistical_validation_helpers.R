@@ -154,6 +154,7 @@ dependence_design <- function(model_dat, kind = c("none", "camera_iid", "camera_
   list(indices = data.frame(camera_time = time, camera_rep = camera),
        n_camera = max(camera), n_time = max(time),
        term = paste0("f(camera_time, model='ar1', replicate=camera_rep, n=", max(time),
+                     ", values=seq_len(", max(time), ")",
                      ", hyper=list(prec=list(prior='pc.prec', param=c(1,0.05)),",
                      "rho=list(prior='pc.cor0', param=c(0.7,0.5))))"))
 }
