@@ -96,6 +96,9 @@ dat <- data.frame(plotID = c("a", "a", "b", "b"),
 dep <- dependence_design(dat, "camera_ar1")
 check(identical(dep$indices$camera_time, c(1L, 3L, 1L, 3L)), "AR1 retains missing-month gaps")
 check(dep$n_camera == 2 && dep$n_time == 3, "AR1 replicates are camera-specific")
+ar1_call <- str2lang(dep$term)
+check(identical(eval(ar1_call$values), 1:3),
+      "AR1 formula declares the complete calendar including unobserved months")
 check(errors(dependence_design(transform(dat, month = "2024-01"), "camera_ar1")), "single-month AR1 rejected")
 
 heldout <- data.frame(fold = rep(1:2, each = 5), y = c(rep(1, 8), 5, 5),
