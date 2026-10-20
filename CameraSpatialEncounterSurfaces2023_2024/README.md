@@ -1,9 +1,19 @@
 # Bayesian Spatial Encounter-Surface Models For 2023-2024 Wolf Camera-Trap Detections
 
-This project contains the final 2023-2024 wolf relative encounter-frequency models
+> **Methods update; survey rerun required.** The code now calculates map means,
+> SDs, CVs, and 90% credible bounds from joint posterior draws; uses saved spatial
+> folds and training-only prior centering; and compares camera IID/AR1 alternatives.
+> The committed `results/` and the numerical summaries below are **legacy outputs
+> from the earlier implementation**. They have not been regenerated with these
+> corrections and must not be presented as validation of the updated code.
+> In particular, legacy map uncertainty used plug-in month/zero-inflation factors.
+> See [the correction and rerun guide](docs/statistical_corrections.md).
+
+
+This project contains the 2023-2024 wolf relative encounter-frequency models
 from camera-trap data. This file is the single reference for the ecological
-question, the methodology, the input data structure, the three final wolf models
-(plus two human-activity companion surfaces) with their full diagnostic numbers,
+question, the methodology, the input data structure, the three primary wolf models
+(plus four companion surfaces) with their legacy diagnostic numbers,
 and the outputs needed to reproduce or audit the analysis. Each `results/` subfolder has its own short README that only
 lists and describes the files it contains; all explanation lives here.
 
@@ -24,15 +34,17 @@ the repository -- for both
 [wolf](#single-month-spatial-surface-wolf-march-2024) and
 [human activity](#single-month-spatial-surface-human-activity-march-2024).
 
-All numbers below are from `WOLF_RUN_PROFILE=final` runs against the private
-camera-trap data, and match the files committed under `results/`.
+All survey numbers below describe earlier `WOLF_RUN_PROFILE=final` runs against
+the private camera-trap data and match the legacy files under `results/`.
 
 > **Refactor note (shared-library consolidation).** The three surveys now share
 > one analysis library, `scripts/wolf_encounter_surface_lib.R`, run through thin
 > per-survey runners (`run_road_2023.R`, `run_road_2024.R`, `run_forest_2024.R`),
 > so every survey runs the identical analyses, diagnostics, and outputs. The
-> road-camera 2023 and 2024 pipelines are behaviour-preserving (the library
-> holds the same code that produced their committed results). The forest-camera
+> original consolidation preserved the road-camera 2023 and 2024 behaviour.
+> The subsequent statistical corrections intentionally change uncertainty and
+> validation outputs, so the current library does not reproduce the legacy
+> archive unchanged. The forest-camera
 > 2024 survey now runs that same pipeline, which **added the candidate-likelihood
 > model-comparison table it previously lacked** and standardized its
 > prior-sensitivity set to the shared six variants. `results/forest_2024/` and
@@ -59,23 +71,23 @@ Three wolf analyses are included, plus two human-activity companion surfaces
 | Wolf March 2024 *(companion)* | Poisson spatial-only INLA-SPDE model (single month) | 60 | 303 | 1783.4 camera-days | `results/wolf_march_2024/` |
 | Human-activity March 2024 *(companion)* | Poisson spatial-only INLA-SPDE model (single month) | 60 | 2805 | 1783.4 camera-days | `results/human_march_2024/` |
 
-Quick-glance diagnostic status (full numbers are in each survey's section below):
+Legacy diagnostic status (all surveys require corrected reruns; full historical
+numbers are in each survey's section below):
 
 | Survey | Likelihood | Required diagnostics | Open caveat |
 | --- | --- | --- | --- |
 | Road-camera 2023 | Negative-binomial | Pass | None |
 | Forest-camera 2024 | Negative-binomial | Pass | Only 46 independent events, so posterior uncertainty on month/spatial effects is wide |
-| Road-camera 2024 | Zero-inflated negative-binomial | Pass | Residual temporal autocorrelation of unestablished cause (mechanism tested and ruled out); cross-validation and mesh sensitivity indicate it does not distort the mapped surface |
-| Human-activity 2023 *(companion)* | Negative-binomial | Pass | None |
-| Human-activity 2024 *(companion)* | Negative-binomial | Fail | Small but significant residual spatial autocorrelation (Moran p = 0.017) not removed by finer meshing; retained as a relative disturbance index with that caveat |
+| Road-camera 2024 | Zero-inflated negative-binomial | Legacy gate passes; further review required | Residual temporal association; its effect on the surface has not been established. Compare camera IID/AR1 alternatives and map differences |
+| Human-activity 2023 *(companion)* | Negative-binomial | Legacy gate passes; calibration review required | Legacy 90% camera-total interval coverage is 77%; inspect fold results and dependence alternatives |
+| Human-activity 2024 *(companion)* | Negative-binomial | Review required | Legacy camera-total 90% interval coverage is 80%, and Moran p = 0.017; model adequacy remains unresolved |
 | Wolf March 2024 *(companion)* | Poisson | Pass | Single month, spatial-only (no month effect); the only spring wolf surface. Model comparison prefers Poisson (no overdispersion) |
 | Human-activity March 2024 *(companion)* | Poisson | Pass | Single-month spatial-only human-activity surface; model comparison prefers Poisson |
 
-For the five multi-month surveys, WAIC-based model comparison clearly
-rejects a simpler Poisson likelihood in favor of the NB or ZINB model shown
-above; the two single-month March 2024 surfaces instead prefer Poisson,
-because a single calendar month carries none of the between-month
-overdispersion that pooling months induces (see their sections below). For
+For the five multi-month surveys, the legacy WAIC comparison favors NB or ZINB
+over Poisson. The two single-month March 2024 comparisons favor Poisson.
+This contrast does not establish which process causes overdispersion; a single
+month can also contain overdispersed counts. For
 road-camera 2023 specifically, a ZINB variant scored a fractionally lower
 (better) WAIC than NB (delta WAIC 0.25), but its estimated zero-inflation
 probability was small (3.2%) and not mechanistically justified, so the
@@ -87,9 +99,12 @@ comparison tables.
 Every `_model_comparison.csv` carries a `cpo_failure_rate` column. It is the
 fraction of observations for which INLA flagged its leave-one-out
 conditional predictive ordinate as unreliable, and it is a numerical
-diagnostic of the approximation -- not a measure of fit. A high rate means
-that row's cross-validatory quantities (and, to a lesser extent, its
-WAIC/DIC) should be read with caution.
+diagnostic of the approximation, not a measure of fit. A high rate means that
+row's CPO-based leave-one-out quantities need numerical investigation. CPO
+failure does not by itself establish that WAIC or DIC is unreliable; those
+criteria summarize different quantities. INLA's
+[`inla.cpo()`](https://www.r-inla.org/learnmore/docs/reference/cpo.html)
+can recompute flagged CPO/PIT values by leaving out observations explicitly.
 
 In the five multi-month surveys the selected NB or ZINB model has a rate of
 0, and only the rejected Poisson candidate shows failures. The two
@@ -98,8 +113,8 @@ selected model and the one with failures (wolf 0.690, human-activity 0.207).
 Those two surfaces are retained on the strength of their WAIC margin
 (5.6 and 20.5 units clear of NB), their posterior predictive checks, and
 their spatial cross-validation, all of which are reported in the same
-folder -- but the elevated CPO failure rate is a stated limitation of the
-March surfaces, and their WAIC margin should not be treated as precise.
+folder. Their CPO failures remain a separate unresolved numerical limitation;
+WAIC comparisons also require the usual model and diagnostic assessment.
 
 ### Comparing Across Years
 
@@ -107,8 +122,8 @@ The 2023 and 2024 road-camera surfaces use **different likelihoods** --
 negative-binomial for 2023, zero-inflated negative-binomial for 2024 -- each
 selected by the same rule applied to that year's own data (2023 kept NB for
 parsimony at delta WAIC 0.25; 2024 took ZINB at delta WAIC 3.67, beyond the
-2-unit parsimony margin). The two surfaces are therefore each internally
-valid, but their absolute rates do not rest on a common observation model.
+2-unit parsimony margin). The two surfaces use different observation models,
+and their adequacy must be assessed separately after the corrected reruns.
 For year-on-year comparison, prefer within-year standardized values or
 relative spatial pattern over differences in raw events per 100 camera-days.
 The same caution applies to the March 2024 single-month surfaces, which are
@@ -121,37 +136,26 @@ effort-weighted and annualized over that survey's sampled months (see
 [Annualized Map Surface](#annualized-map-surface) below) -- not abundance,
 density, occupancy, or population size.
 
-All three are derived at every prediction-grid cell from the same posterior
-linear predictor `eta(s) ~ N(eta_mean(s), eta_sd(s)^2)` that INLA returns for
-that cell:
+The updated code evaluates the expected encounter rate within every joint
+posterior draw, projecting sampled SPDE mesh coefficients onto the grid:
 
 ```text
-mean(s) = (1 - pi) * annual_factor * 100 * exp(eta_mean(s) + 0.5 * eta_sd(s)^2)
-cv(s)   = sqrt(exp(eta_sd(s)^2) - 1)
-sd(s)   = mean(s) * cv(s)
+rate_draw(s) = 100 * (1 - pi_draw) * exp(intercept_draw + spatial_draw(s))
+               * sum_month(weight_month * exp(month_effect_draw))
 ```
 
-This is the standard log-normal mean/SD/CV correction applied to the
-annualized rate; `eta_sd(s)` is INLA's posterior SD of the linear predictor
-at that cell, on the log scale. `pi` is the structural-zero probability,
-which enters only for the zero-inflated road-camera 2024 surface: every
-other survey has a non-zero-inflated likelihood and `pi = 0`, so the factor
-drops out. For road-camera 2024 the value applied is the posterior-draw mean
-from the diagnostic refit, `pi = 0.075`, so that surface is the count-process
-rate scaled by 0.925. Because `pi` is a constant multiplier, it shifts the
-mean and SD surfaces but leaves the CV surface unchanged.
+The reference month has effect zero. Weights are the survey's fixed observed
+camera-effort proportions; unsampled months receive no inferred annual coverage.
+Single-month analyses use a factor of one. Spatial, intercept, month, and
+zero-inflation draws come from the **same fit and same joint draw**. Means, SDs,
+CVs, and 5th/95th percentiles are then calculated from the transformed rates.
+Grid projection is processed in chunks to limit memory use. These are credible
+summaries of the latent mean, without future count noise. Predictive count
+intervals are generated separately for cross-validation.
 
-- **Posterior mean** -- the central estimate itself, in independent wolf
-  events per 100 camera-days.
-- **Posterior SD** -- absolute uncertainty, on the same units as the mean.
-  Because `sd(s) = mean(s) * cv(s)`, it is a product of the local rate's
-  magnitude and its relative uncertainty: a cell with a low predicted rate
-  has a low absolute SD even where its relative uncertainty is high.
-- **Posterior CV** (`sd(s) / mean(s)`) -- relative uncertainty, unitless,
-  not confounded by the local rate's magnitude. This is the map to check
-  for "how much do we actually know here": whether a cell's estimate is
-  mostly driven by nearby camera data or has fallen back toward the
-  model's fixed-effect baseline.
+The legacy results below instead use Gaussian marginal moment formulas and
+fixed month/zero-inflation multipliers. Their SD/CV values omit uncertainty in
+those multipliers and require regeneration before interpretation with the new method.
 
 **Display note.** The PNG figures are 9.5 x 9 inches at 150 dpi, sized for
 on-screen reading and ordinary print: they are drawn with bilinear
@@ -321,6 +325,18 @@ own fail a model. For example, the road-camera 2023 model reports "required
 diagnostics pass: TRUE" alongside a camera PIT KS p-value near 0.0015: the
 low value is shown, not dropped, but does not gate the pass/fail call.
 
+The updated validation report distinguishes the legacy PPC/Moran gate from an
+`overall review status`. Held-out coverage below the nominal 90% is an explicit
+descriptive review flag; fold-specific coverage, sample counts, interval widths,
+and interval scores accompany it. This flag is not a significance test treating
+correlated camera-month observations as independent.
+
+Spatial folds are constructed once, saved with camera coordinates, and reused by
+all dependence alternatives. A clustering failure stops validation. Each fold's
+broad intercept prior is centered using **training outcomes/exposure only**; the
+saved training-prior table makes this auditable. Fixed month designs may use known
+held-out calendar labels, but never their responses.
+
 Model comparison across candidate likelihoods (Poisson / NB / ZINB) uses
 WAIC (Watanabe 2010), cross-checked against DIC (Spiegelhalter et al. 2002).
 Out-of-sample predictive performance is checked with spatial block
@@ -353,21 +369,16 @@ stay stable. Because all surveys run the same code, these checks are identical
 in scope across surveys: they test WAIC/DIC/hyperparameter stability rather
 than recomputing the full PPC/Moran's I gate at each variant.
 
-**Are the priors really weakly informative?** Yes, for all three wolf models, on
-two grounds (the companion surfaces are discussed in their own sections). By construction, every prior is deliberately wide: the
-intercept and NB-size priors use SD 2.5 and 2 on the log scale, the month
-log-rate-ratio priors use SD 1, and the spatial range/SD priors are PC
-priors (Fuglstad et al. 2019; Simpson et al. 2017), a family specifically
-designed to shrink toward simplicity without dominating the likelihood.
-Empirically, each model's prior-sensitivity check (six variants per survey,
-see each survey's section below) shows WAIC and the posterior
-hyperparameters stay essentially stable as the priors are perturbed --
-that stability is the evidence that the data, not the prior, is driving the
-posterior. The one caveat is forest-camera 2024: with only 46 events, the
-*relative* influence of the prior on the posterior is higher simply because
-there is so little likelihood information to compete with it -- a
-data-sparsity effect, not the prior itself being more informative than
-described.
+**Prior interpretation.** The intercept and NB-size priors use SD 2.5 and 2
+on the log scale, month log-rate ratios use SD 1, and spatial range/SD use
+PC priors (Fuglstad et al. 2019; Simpson et al. 2017). Their influence depends
+on the parameter scale and the information in each survey; a broad or PC prior
+can still materially affect a sparse-data posterior. The six legacy
+perturbations assess stability of selected criteria and hyperparameters, not
+prior irrelevance or stability under every plausible prior. This matters
+especially for forest-camera 2024, with only 46 events. Corrected reruns must
+review the sensitivity evidence together with mapped uncertainty and predictive
+checks before drawing a robustness conclusion.
 
 ## Repository Layout
 
@@ -744,17 +755,12 @@ Main diagnostics:
 - temporal residual autocorrelation: within-camera lag-1 r = -0.181,
   p = 0.002179 (n = 284 pairs); date-ordered mean-residual lag-1 ACF: 0.256.
   Residual deployment-order temporal structure remains detectable here,
-  unlike the other two surveys. The originally hypothesized mechanism
-  (staggered deployment timing correlated with camera location) was tested
-  directly: a Spearman correlation of deployment start day-of-year against
-  UTM northing (`results/road_2024/wolf_2024_exploratory_timing_vs_northing.csv`)
-  gives rho = 0.058, p = 0.280 (n = 344) -- not a meaningful correlation, so
-  it does not explain the residual autocorrelation, and no specific
-  mechanism is established. This is treated as an open temporal caution
-  rather than corrected, on the grounds that it does not appear to distort
-  the mapped spatial surface: the spatial field is fit jointly with, and net
-  of, the month effect, and both spatial block cross-validation coverage and
-  mesh sensitivity remain stable (below);
+  unlike the other two surveys. An exploratory correlation between deployment
+  timing and northing was near zero, but that result does not rule out timing
+  mechanisms or establish absence of bias. The effect of residual temporal
+  structure on the mapped surface remains unresolved. The updated code fits
+  camera IID and replicated monthly AR1 alternatives, reuses identical spatial
+  folds, and exports spatial-surface differences and uncertainty summaries;
 - spatial block cross-validation: row 90 percent coverage = 0.96, camera 90
   percent coverage = 0.93;
 - prior sensitivity: WAIC, DIC, and posterior hyperparameters are stable
@@ -780,9 +786,8 @@ independent events (46), which widens posterior uncertainty on month and
 spatial effects without indicating a model problem. The road-camera 2024 model passes the required
 posterior-predictive and spatial diagnostics and is supported over NB/Poisson
 by WAIC; its one open issue is a residual within-camera temporal correlation
-whose mechanism is not established, but which spatial block cross-validation
-and mesh sensitivity both indicate does not distort the mapped spatial
-surface.
+whose mechanism and effect on the mapped spatial surface remain unresolved.
+Spatial CV and mesh sensitivity alone do not establish absence of temporal distortion.
 
 ## Human-Activity Companion Surfaces
 
@@ -987,10 +992,19 @@ included in each `results/<survey>/` folder and what each one contains.
 - `ggplot2`
 - `viridis`
 - `scales`
+- `sn` (required by INLA joint posterior sampling)
 - `INLA`
 
-The scripts do not install packages automatically unless explicitly changed by
-the user. INLA usually requires installing from the INLA repository.
+The scripts check these dependencies before running. Install them once in R:
+
+```r
+install.packages(
+  c("readr", "dplyr", "tidyr", "sf", "terra", "ggplot2", "viridis", "scales", "sn", "INLA"),
+  repos = c(INLA = "https://inla.r-inla-download.org/R/stable", getOption("repos"))
+)
+```
+
+Package installation remains opt-in; analysis runs do not modify the R environment.
 
 ## Reproduction And Validation
 
@@ -1010,18 +1024,19 @@ with `WOLF_RUN_PROFILE` set to `final` for a publication run (see
 [Runtime Profiles](#runtime-profiles)). Each writes its full output archive to
 `outputs/…`; the curated subset is what lives under `results/`. The raw
 camera-trap data are private and will be released with the associated
-publication; no sample data are distributed in this repository.
+publication. The public integration example generates synthetic data without
+using survey observations; see the [public checks](../README.md#run-the-public-checks).
 
 **Reproducing and checking the committed results.** Because the raw survey data
 are private, the committed `results/` are regenerated on the machine that holds
 them, then checked:
 
 1. Run each runner with `WOLF_RUN_PROFILE=final`.
-2. The pipeline is deterministic given the code and data, so the regenerated
-   `hyperparameters.csv`, `model_comparison.csv`, `run_manifest.csv`, diagnostic
-   reports, and map GeoTIFFs should match the committed `results/<survey>/` files
-   (bit-for-bit, modulo minor INLA-version drift). Diff them to confirm, and
-   re-curate any folder that changes.
+2. The corrected method intentionally changes map uncertainty and validation outputs.
+   Preserve the old result archive, inspect the new reports, and compare models
+   before replacing curated results. After an approved corrected run, record
+   numerical tolerances for repeat runs; do not require binary-identical GeoTIFFs
+   or claim identity across different INLA builds.
 3. Re-run `Rscript scripts/capture_session_info.R` and commit
    `results/session_info.txt` so the reported numbers are tied to a known
    R/INLA build.
@@ -1086,3 +1101,4 @@ released with the associated publication (see `data/README.md`).
 - Watanabe, S. (2010). Asymptotic equivalence of Bayes cross validation and
   widely applicable information criterion in singular learning theory.
   *Journal of Machine Learning Research*, 11, 3571-3594.
+

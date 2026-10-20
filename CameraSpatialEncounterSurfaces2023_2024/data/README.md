@@ -43,19 +43,14 @@ WOLF_RUN_PROFILE=final Rscript scripts/run_road_2023.R
 `run_profile,final` in their `_run_manifest.csv`, so anything else will not
 reproduce them.
 
-Two classes of difference are expected even from an exact rerun, and neither
-changes any reported conclusion:
+The corrected implementation sets separate fixed R and INLA posterior-sampling
+seeds and records the sampling method/effort in the manifest. Exact numerical
+identity across INLA versions and platform math libraries is not guaranteed.
+The previous claims about map differences and stable gate outcomes describe the
+legacy run and have not been verified for this updated implementation.
 
-- INLA's optimizer converges to slightly different points between runs,
-  shifting hyperparameters and WAIC in the 5th to 7th significant figure.
-- The simulation-based diagnostics (posterior predictive checks, Moran
-  permutation tests, PIT, spatial block cross-validation) depend on the RNG
-  stream, so they move in the 2nd to 3rd decimal even under the fixed seed.
-
-The mapped GeoTIFF surfaces are stable to within roughly 1e-03 relative
-difference, and the diagnostic gate outcomes and model selection are
-reproducible exactly. See `results/session_info.txt` for the R and INLA
-versions used.
+Do not overwrite curated `results/` until the corrected runs and their model
+comparisons have been reviewed. See [the rerun guide](../docs/statistical_corrections.md).
 
 ## Required Files
 
@@ -156,3 +151,4 @@ per-month effort accounting is used to isolate the March exposure and events.)
 
 This keeps the count data and the exposure data aligned before fitting month
 effects.
+
