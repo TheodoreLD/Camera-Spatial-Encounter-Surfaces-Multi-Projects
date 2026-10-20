@@ -102,5 +102,23 @@ zi <- fit_dependence_model(dat, settings, "zeroinflatednbinomial1", "none", base
 zi_samples <- posterior_samples_safe(zi$fit, 32L)
 p <- extract_pi_samples(zi$fit, zi_samples, "zeroinflatednbinomial1")
 stopifnot(length(p) == 32L, all(p >= 0 & p < 1))
-cat("PASS: synthetic native INLA mapping, strict CV, camera IID/AR1 comparisons, reports, and ZINB samples.\n")
+zi_map <- joint_surface_summary(zi, dat, settings, "zeroinflatednbinomial1")
+stopifnot(all(is.finite(zi_map$summary$sd)), all(zi_map$summary$mean > 0))
+write_csv(zi_map$summary, path_out("synthetic_zinb_joint_map.csv"))
+
+# Single-month Poisson surveys must also work without month-effect columns.
+single_settings <- modifyList(settings, list(use_month_effect = FALSE,
+  month_reference = "2024-03", month_prediction = "2024-03"))
+single_dat <- dat[dat$month == "2024-03", setdiff(names(dat), temporal_month_terms(dat))]
+single_dat <- add_month_design(single_dat, single_settings)
+po <- fit_dependence_model(single_dat, single_settings, "poisson", "none", base$pred_sf)
+po_samples <- posterior_samples_safe(po$fit, 32L)
+po_diag <- compute_diagnostics(po$fit, po_samples, po$model_dat, po$obs_index,
+                              po$camera_sf, "poisson", write_files = FALSE)
+po_map <- joint_surface_summary(po, single_dat, single_settings, "poisson")
+stopifnot(!length(temporal_month_terms(single_dat)), po_map$annualization$factor == 1,
+          all(is.finite(po_map$summary$sd)), all(po_map$summary$mean > 0),
+          nrow(po_diag$model_dat) == 12L)
+write_csv(po_map$summary, path_out("synthetic_poisson_single_month_joint_map.csv"))
+cat("PASS: synthetic native INLA NB/ZINB/single-month Poisson mapping, strict CV, camera IID/AR1 comparisons, and reports.\n")
 cat("R/INLA versions:", as.character(getRversion()), as.character(packageVersion("INLA")), "\n")
