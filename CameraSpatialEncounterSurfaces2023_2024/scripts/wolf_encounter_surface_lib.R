@@ -223,7 +223,7 @@ cat(sprintf(
 
 required_packages <- c(
   "readr", "dplyr", "tidyr", "sf", "terra",
-  "ggplot2", "viridis", "scales", "INLA"
+  "ggplot2", "viridis", "scales", "sn", "INLA"
 )
 
 for (p in required_packages) {
