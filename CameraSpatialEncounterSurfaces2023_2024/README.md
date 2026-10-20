@@ -10,10 +10,10 @@
 > See [the correction and rerun guide](docs/statistical_corrections.md).
 
 
-This project contains the final 2023-2024 wolf relative encounter-frequency models
+This project contains the 2023-2024 wolf relative encounter-frequency models
 from camera-trap data. This file is the single reference for the ecological
-question, the methodology, the input data structure, the three final wolf models
-(plus two human-activity companion surfaces) with their full diagnostic numbers,
+question, the methodology, the input data structure, the three primary wolf models
+(plus four companion surfaces) with their legacy diagnostic numbers,
 and the outputs needed to reproduce or audit the analysis. Each `results/` subfolder has its own short README that only
 lists and describes the files it contains; all explanation lives here.
 
@@ -34,15 +34,17 @@ the repository -- for both
 [wolf](#single-month-spatial-surface-wolf-march-2024) and
 [human activity](#single-month-spatial-surface-human-activity-march-2024).
 
-All numbers below are from `WOLF_RUN_PROFILE=final` runs against the private
-camera-trap data, and match the files committed under `results/`.
+All survey numbers below describe earlier `WOLF_RUN_PROFILE=final` runs against
+the private camera-trap data and match the legacy files under `results/`.
 
 > **Refactor note (shared-library consolidation).** The three surveys now share
 > one analysis library, `scripts/wolf_encounter_surface_lib.R`, run through thin
 > per-survey runners (`run_road_2023.R`, `run_road_2024.R`, `run_forest_2024.R`),
 > so every survey runs the identical analyses, diagnostics, and outputs. The
-> road-camera 2023 and 2024 pipelines are behaviour-preserving (the library
-> holds the same code that produced their committed results). The forest-camera
+> original consolidation preserved the road-camera 2023 and 2024 behaviour.
+> The subsequent statistical corrections intentionally change uncertainty and
+> validation outputs, so the current library does not reproduce the legacy
+> archive unchanged. The forest-camera
 > 2024 survey now runs that same pipeline, which **added the candidate-likelihood
 > model-comparison table it previously lacked** and standardized its
 > prior-sensitivity set to the shared six variants. `results/forest_2024/` and
@@ -69,7 +71,8 @@ Three wolf analyses are included, plus two human-activity companion surfaces
 | Wolf March 2024 *(companion)* | Poisson spatial-only INLA-SPDE model (single month) | 60 | 303 | 1783.4 camera-days | `results/wolf_march_2024/` |
 | Human-activity March 2024 *(companion)* | Poisson spatial-only INLA-SPDE model (single month) | 60 | 2805 | 1783.4 camera-days | `results/human_march_2024/` |
 
-Quick-glance diagnostic status (full numbers are in each survey's section below):
+Legacy diagnostic status (all surveys require corrected reruns; full historical
+numbers are in each survey's section below):
 
 | Survey | Likelihood | Required diagnostics | Open caveat |
 | --- | --- | --- | --- |
@@ -81,11 +84,10 @@ Quick-glance diagnostic status (full numbers are in each survey's section below)
 | Wolf March 2024 *(companion)* | Poisson | Pass | Single month, spatial-only (no month effect); the only spring wolf surface. Model comparison prefers Poisson (no overdispersion) |
 | Human-activity March 2024 *(companion)* | Poisson | Pass | Single-month spatial-only human-activity surface; model comparison prefers Poisson |
 
-For the five multi-month surveys, WAIC-based model comparison clearly
-rejects a simpler Poisson likelihood in favor of the NB or ZINB model shown
-above; the two single-month March 2024 surfaces instead prefer Poisson,
-because a single calendar month carries none of the between-month
-overdispersion that pooling months induces (see their sections below). For
+For the five multi-month surveys, the legacy WAIC comparison favors NB or ZINB
+over Poisson. The two single-month March 2024 comparisons favor Poisson.
+This contrast does not establish which process causes overdispersion; a single
+month can also contain overdispersed counts. For
 road-camera 2023 specifically, a ZINB variant scored a fractionally lower
 (better) WAIC than NB (delta WAIC 0.25), but its estimated zero-inflation
 probability was small (3.2%) and not mechanistically justified, so the
@@ -97,9 +99,12 @@ comparison tables.
 Every `_model_comparison.csv` carries a `cpo_failure_rate` column. It is the
 fraction of observations for which INLA flagged its leave-one-out
 conditional predictive ordinate as unreliable, and it is a numerical
-diagnostic of the approximation -- not a measure of fit. A high rate means
-that row's cross-validatory quantities (and, to a lesser extent, its
-WAIC/DIC) should be read with caution.
+diagnostic of the approximation, not a measure of fit. A high rate means that
+row's CPO-based leave-one-out quantities need numerical investigation. CPO
+failure does not by itself establish that WAIC or DIC is unreliable; those
+criteria summarize different quantities. INLA's
+[`inla.cpo()`](https://www.r-inla.org/learnmore/docs/reference/cpo.html)
+can recompute flagged CPO/PIT values by leaving out observations explicitly.
 
 In the five multi-month surveys the selected NB or ZINB model has a rate of
 0, and only the rejected Poisson candidate shows failures. The two
@@ -108,8 +113,8 @@ selected model and the one with failures (wolf 0.690, human-activity 0.207).
 Those two surfaces are retained on the strength of their WAIC margin
 (5.6 and 20.5 units clear of NB), their posterior predictive checks, and
 their spatial cross-validation, all of which are reported in the same
-folder -- but the elevated CPO failure rate is a stated limitation of the
-March surfaces, and their WAIC margin should not be treated as precise.
+folder. Their CPO failures remain a separate unresolved numerical limitation;
+WAIC comparisons also require the usual model and diagnostic assessment.
 
 ### Comparing Across Years
 
@@ -117,8 +122,8 @@ The 2023 and 2024 road-camera surfaces use **different likelihoods** --
 negative-binomial for 2023, zero-inflated negative-binomial for 2024 -- each
 selected by the same rule applied to that year's own data (2023 kept NB for
 parsimony at delta WAIC 0.25; 2024 took ZINB at delta WAIC 3.67, beyond the
-2-unit parsimony margin). The two surfaces are therefore each internally
-valid, but their absolute rates do not rest on a common observation model.
+2-unit parsimony margin). The two surfaces use different observation models,
+and their adequacy must be assessed separately after the corrected reruns.
 For year-on-year comparison, prefer within-year standardized values or
 relative spatial pattern over differences in raw events per 100 camera-days.
 The same caution applies to the March 2024 single-month surfaces, which are
@@ -364,21 +369,16 @@ stay stable. Because all surveys run the same code, these checks are identical
 in scope across surveys: they test WAIC/DIC/hyperparameter stability rather
 than recomputing the full PPC/Moran's I gate at each variant.
 
-**Are the priors really weakly informative?** Yes, for all three wolf models, on
-two grounds (the companion surfaces are discussed in their own sections). By construction, every prior is deliberately wide: the
-intercept and NB-size priors use SD 2.5 and 2 on the log scale, the month
-log-rate-ratio priors use SD 1, and the spatial range/SD priors are PC
-priors (Fuglstad et al. 2019; Simpson et al. 2017), a family specifically
-designed to shrink toward simplicity without dominating the likelihood.
-Empirically, each model's prior-sensitivity check (six variants per survey,
-see each survey's section below) shows WAIC and the posterior
-hyperparameters stay essentially stable as the priors are perturbed --
-that stability is the evidence that the data, not the prior, is driving the
-posterior. The one caveat is forest-camera 2024: with only 46 events, the
-*relative* influence of the prior on the posterior is higher simply because
-there is so little likelihood information to compete with it -- a
-data-sparsity effect, not the prior itself being more informative than
-described.
+**Prior interpretation.** The intercept and NB-size priors use SD 2.5 and 2
+on the log scale, month log-rate ratios use SD 1, and spatial range/SD use
+PC priors (Fuglstad et al. 2019; Simpson et al. 2017). Their influence depends
+on the parameter scale and the information in each survey; a broad or PC prior
+can still materially affect a sparse-data posterior. The six legacy
+perturbations assess stability of selected criteria and hyperparameters, not
+prior irrelevance or stability under every plausible prior. This matters
+especially for forest-camera 2024, with only 46 events. Corrected reruns must
+review the sensitivity evidence together with mapped uncertainty and predictive
+checks before drawing a robustness conclusion.
 
 ## Repository Layout
 
@@ -1024,7 +1024,8 @@ with `WOLF_RUN_PROFILE` set to `final` for a publication run (see
 [Runtime Profiles](#runtime-profiles)). Each writes its full output archive to
 `outputs/…`; the curated subset is what lives under `results/`. The raw
 camera-trap data are private and will be released with the associated
-publication; no sample data are distributed in this repository.
+publication. The public integration example generates synthetic data without
+using survey observations; see the [public checks](../README.md#run-the-public-checks).
 
 **Reproducing and checking the committed results.** Because the raw survey data
 are private, the committed `results/` are regenerated on the machine that holds
